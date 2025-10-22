@@ -1,0 +1,6 @@
+﻿Email=ryan@idd.co.il
+Password=}21DzA7Q?-coH*_P
+TimeFilter=
+ChromeProfile=Automation
+SheetAPI=https://script.google.com/macros/s/AKfycbwpMFcdBvmWqfTgutE6jkTMQrCwS0jS8ubv0oSI5-Skcnm6ranV4hJQ2PdgsriddEvP/exec
+TimerEnabled= falses

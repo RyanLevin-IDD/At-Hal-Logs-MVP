@@ -1,0 +1,214 @@
+//Webapp endpoints
+
+//GET request - This Send the names of the domains from the Domains List tab
+function doGet(e) {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet();
+    const tab = sheet.getSheetByName("Domains List");
+
+    if (!tab) {
+      return ContentService.createTextOutput(
+        JSON.stringify({ status: "error", message: "'Domains List' sheet not found" })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Get all values in column 1 starting from row 2 (skip header)
+    const data = tab.getRange(2, 1, tab.getLastRow() - 1, 1).getValues();
+
+    // Flatten the array to a list of strings
+    const domains = data.map(row => row[0]).filter(name => name); //remove empty rows
+
+    return ContentService.createTextOutput(
+      JSON.stringify({ status: "success", domains: domains })
+    ).setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    return ContentService.createTextOutput(
+      JSON.stringify({ status: "error", message: err.message })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+//POST request - This recives the JSON logs
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+
+    // Send immediate response
+    const response = ContentService
+      .createTextOutput(JSON.stringify({ status: "received" }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+    // Process async
+    if (data.results && data.domain) {
+      handleAccessLogsAsync(data);
+    } else if (data.machineName && data.logs) {
+      handleMachineLogAsync(data);
+    }
+
+    return response;
+
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: "error", message: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function handleAccessLogsAsync(data) {
+  handleAccessLogs(data);
+}
+
+function handleMachineLogAsync(data) {
+  handleMachineLog(data);
+}
+
+function handleAccessLogs(data) {
+  const domain = data.domain;
+  const results = data.results;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+
+  //Existing tab logic
+  let sheetName = sanitizeSheetName(domain);
+  let tab = sheet.getSheetByName(sheetName);
+  if (!tab) tab = sheet.insertSheet(sheetName);
+
+  const baseHeaders = ["Time", "IP Address", "Request", "Device", "Country", "Size (bytes)", "Response time (ms)"];
+  ensureColumns(tab, baseHeaders);
+
+  const rows = results.map(obj => baseHeaders.map(h => obj[h] || ""));
+  tab.getRange(tab.getLastRow() + 1, 1, rows.length, baseHeaders.length).setValues(rows);
+
+  // --- New tab for dynamic URL parameters ---
+  const logTabName = `Logs-${domain}`;
+  let logTab = sheet.getSheetByName(logTabName);
+  if (!logTab) logTab = sheet.insertSheet(logTabName);
+
+  // Ensure first header exists
+  ensureColumns(logTab, ["Request"]);
+
+  // Collect all Requests from data
+  const requestList = results.map(r => r["Request"]).filter(r => r); // remove empty
+
+  processUrlLogs(logTab, requestList, results, baseHeaders);
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: "success", type: "access_logs", appended: rows.length }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function processUrlLogs(sheet, requestList, results, baseHeaders) {
+  //Ensure base headers exist
+  ensureColumns(sheet, baseHeaders);
+
+  //Read current headers
+  let headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.toLowerCase());
+  let headerMap = {};
+  headers.forEach((h, idx) => headerMap[h] = idx);
+
+  const newHeadersSet = new Set();
+  const parsedRows = [];
+
+  //Process each result
+  results.forEach(result => {
+    const rowData = {};
+
+    // Add all base columns
+    baseHeaders.forEach(h => {
+      rowData[h.toLowerCase()] = result[h] || "";
+    });
+
+    //Parse URL
+    const url = result["Request"];
+    if (!url) return;
+
+    const cleanUrl = url.replace(/\s*HTTP\/1\.1$/i, "");
+    rowData["request"] = cleanUrl;
+
+    const [_, queryString] = cleanUrl.split("?");
+    if (queryString) {
+      const params = queryString.split("&");
+      params.forEach(param => {
+        if (!param.includes("=")) return;
+        let [key, value] = param.split("=");
+        key = decodeURIComponent(key).toLowerCase();
+        value = decodeURIComponent(value || "");
+        rowData[key] = value;
+        if (!(key in headerMap)) newHeadersSet.add(key);
+      });
+    }
+
+    parsedRows.push(rowData);
+  });
+
+  //Add any new headers
+  const newHeaders = Array.from(newHeadersSet);
+  newHeaders.forEach(h => {
+    sheet.getRange(1, sheet.getLastColumn() + 1).setValue(h);
+  });
+
+  // Refresh header map
+  headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.toLowerCase());
+  headerMap = {};
+  headers.forEach((h, idx) => headerMap[h] = idx);
+
+  // --- Step 4: Build aligned rows ---
+  const finalCols = headers.length;
+  const newRows = parsedRows.map(obj => {
+    const row = Array(finalCols).fill("");
+    for (const key in obj) {
+      if (key in headerMap) {
+        row[headerMap[key]] = obj[key];
+      }
+    }
+    return row;
+  });
+
+  //Append
+  if (newRows.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, finalCols).setValues(newRows);
+  }
+
+  // Highlight headers
+  sheet.getRange(1, 1, 1, sheet.getLastColumn()).setBackground("#93CCEA");
+}
+
+
+function handleMachineLog(data) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+  const tabName = "Info Logs";
+  const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm:ss");
+
+  // Ensure tab exists
+  let tab = sheet.getSheetByName(tabName);
+  if (!tab) {
+    tab = sheet.insertSheet(tabName);
+    tab.appendRow(["Time", "Machine Name", "Log"]);
+  }
+
+  // Append new log entry
+  const row = [now, data.machineName, data.logs];
+  tab.appendRow(row);
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: "success", type: "machine_log", appended: 1 }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+//Check if we have all the headers we need
+function ensureColumns(sheet, requiredColumns) {
+  let lastCol = sheet.getLastColumn();
+  const headerRow = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+
+  requiredColumns.forEach(col => {
+    if (!headerRow.includes(col)) {
+      sheet.getRange(1, sheet.getLastColumn() + 1).setValue(col);
+    }
+  });
+  sheet.getRange(1, 1, 1, requiredColumns.length).setBackground("#93CCEA");
+}
+
+//Prevents duplicate sheet names
+function sanitizeSheetName(name) {
+  return name.replace(/[\\\/\?\*\[\]]/g, "_").substring(0, 100);
+}
