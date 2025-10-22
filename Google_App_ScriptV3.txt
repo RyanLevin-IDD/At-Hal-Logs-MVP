@@ -1,0 +1,713 @@
+//UI
+function onOpen() {
+  const ui = SpreadsheetApp.getUi(); // Or DocumentApp.getUi(), etc.
+  ui.createMenu('Error handling') // The menu name
+    .addItem('Check for missing parameters', 'checkForMissingHeaders')
+    .addToUi();
+}
+//ENDPOINTS
+
+function doGet(e) {//GET request - This Send the names of the domains from the Domains List tab
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet();
+    const tab = sheet.getSheetByName("Domains List");
+
+    if (!tab) {
+      return ContentService.createTextOutput(
+        JSON.stringify({ status: "error", message: "'Domains List' sheet not found" })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Get all values in column 1 starting from row 2 (skip header)
+    const data = tab.getRange(2, 1, tab.getLastRow() - 1, 1).getValues();
+
+    // Flatten the array to a list of strings
+    const domains = data.map(row => row[0]).filter(name => name); //remove empty rows
+
+    return ContentService.createTextOutput(
+      JSON.stringify({ status: "success", domains: domains })
+    ).setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    return ContentService.createTextOutput(
+      JSON.stringify({ status: "error", message: err.message })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doPost(e) {//POST request - This receives the JSON logs
+  try {
+    const data = JSON.parse(e.postData.contents);
+
+    // Process async
+    if (data.results && data.domain) {
+      // Before any writing happens
+      const responseData = getLogTrackingData(data);
+      
+      //Send response immediately
+      const response = ContentService
+        .createTextOutput(JSON.stringify(responseData))
+        .setMimeType(ContentService.MimeType.JSON);
+      
+      //THEN start async processing
+      handleAccessLogsAsync(data);
+      
+      return response;
+        
+    } else if (data.machineName && data.logs) {
+      // Send immediate response
+      const response = ContentService
+        .createTextOutput(JSON.stringify({ status: "received" }))
+        .setMimeType(ContentService.MimeType.JSON);
+      
+      handleMachineLogAsync(data);
+      
+      return response;
+    }
+
+    // Default response
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: "received" }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: "error", message: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function handleAccessLogsAsync(data) {
+  handleAccessLogs(data);
+}
+function handleMachineLogAsync(data) {
+  handleMachineLog(data);
+}
+function handleAccessLogs(data) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+  const domain = data.domain;
+  let results = data.results;
+
+  // Main sheet for access logs
+  const mainSheetName = domain;
+  const dupSheetName = "Duplicate handler";
+  let mainSheet = sheet.getSheetByName(mainSheetName);
+  let dupSheet = sheet.getSheetByName(dupSheetName);
+  const isFirstRun = !mainSheet;
+
+  if (!mainSheet) {
+    mainSheet = sheet.insertSheet(mainSheetName);
+  }
+  const baseHeaders = ["Time", "IP Address", "Request", "Device", "Country", "Size (bytes)", "Response time (ms)"];
+  ensureColumnsExists(mainSheet, baseHeaders);
+  // Logs tab for URL parameters
+    const logTabName = `Logs-${domain}`;
+    let logSheet = sheet.getSheetByName(logTabName);
+    if (!logSheet) logSheet = sheet.insertSheet(logTabName);
+    ensureColumnsExists(logSheet, ["Request"]);
+
+  results = formatResultsDateTime(results);
+  if (isFirstRun) {
+    // First run: append everything directly
+    appendRows(mainSheet, results, baseHeaders);
+    processUrlLogs(logSheet, results, baseHeaders);
+    return;
+  }
+
+  //Not first run clean duplicate first
+  cleanDuplicatesAndSendToRawData(sheet,dupSheet,mainSheet,logSheet,dupSheetName,baseHeaders,results);
+}
+
+function handleMachineLog(data) { //Processof writing an Info Log to the sheet
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+  const tabName = "Info Logs";
+  let tab = sheet.getSheetByName(tabName);
+  if (!tab) {
+    tab = sheet.insertSheet(tabName);
+  }
+  
+  ensureColumnsExists(tab, ["Time", "Machine Name", "Log"]);
+  const row = [formatTimeToString(new Date()), data.machineName, data.logs];
+  tab.appendRow(row);
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: "success", type: "machine_log", appended: 1 }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function processUrlLogs(logSheet, results, passedOriginalHeaders = null) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+  const originalTab = getOriginalTab(logSheet);
+  if (!originalTab) return;
+
+  // Get or initialize headers
+  let headers = [];
+  let startRow = 2;
+  
+  if (logSheet.getLastRow() > 1) {
+    // Headers already exist - pull them
+    const lastCol = logSheet.getLastColumn();
+    headers = logSheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    startRow = logSheet.getLastRow() + 1;
+  } else {
+    // First run - build initial headers
+    const baseHeaders = passedOriginalHeaders || [];
+    headers = ['Time Received', ...baseHeaders, 'Dev Request'];
+    logSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    logSheet.getRange(1, 1, logSheet.getMaxRows(), headers.length).setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+    // Color headers on first run
+    const baseHeadersCount = (passedOriginalHeaders || []).length + 2;
+    logSheet.getRange(1, 1, 1, baseHeadersCount).setBackground("#93CCEA");
+    logSheet.getRange(1, 1).setBackground("#fff2cc");
+  }
+
+  // Build parameter headers list from the columns
+  const paramHeaders = [];
+  for (let i = 9; i < headers.length; i++) {
+    paramHeaders.push(headers[i].toLowerCase());
+  }
+
+  // First pass: discover all new parameters and add columns
+  results.forEach(result => {
+    const url = result["Request"] || "";
+    const cleanUrl = url.replace(/\s*HTTP\/[0-9.]+.*$/i, "");
+    const [, queryString] = cleanUrl.split("?");
+    
+    if (queryString) {
+      const params = queryString.split("&");
+      const seenInThisUrl = new Set();
+      
+      params.forEach(param => {
+        if (!param.includes("=")) return;
+        
+        let key = param.split("=")[0];
+        key = decodeURIComponent(key).toLowerCase();
+        
+        // Check if parameter already exists in paramHeaders
+        if (!paramHeaders.includes(key)) {
+          // New parameter - add column
+          headers.push(key);
+          paramHeaders.push(key);
+          logSheet.getRange(1, headers.length).setValue(key);
+          logSheet.getRange(1, headers.length).setBackground("#b6d7a8");
+        }
+      });
+    }
+  });
+
+  const finalHeaderMap = createHeaderMap(headers);
+
+  // Second pass: populate all rows
+  results.forEach(result => {
+    const newRow = Array(headers.length).fill("");
+    
+    // Add timestamp
+    newRow[0] = formatTimestamp();
+    
+    // Add original data columns - fixed indices 1-8
+    newRow[1] = result['Time'] || "";
+    newRow[2] = result['IP Address'] || "";
+    newRow[3] = result['Request'] || "";
+    newRow[4] = result['Device'] || "";
+    newRow[5] = result['Country'] || "";
+    newRow[6] = result['Size (bytes)'] || "";
+    newRow[7] = result['Response time (ms)'] || "";
+
+    // Add Dev Request at index 8
+    const url = result["Request"] || "";
+    const cleanUrl = url.replace(/\s*HTTP\/[0-9.]+.*$/i, "");
+    newRow[8] = cleanUrl;
+
+    // Add parameter values
+    const [, queryString] = cleanUrl.split("?");
+    if (queryString) {
+      const params = queryString.split("&");
+      const processedInThisUrl = new Set();
+      
+      params.forEach(param => {
+        if (!param.includes("=")) return;
+        
+        let [key, value] = param.split("=");
+        key = decodeURIComponent(key).toLowerCase();
+        
+        // Write to parameter column if it exists
+        if (key in finalHeaderMap) {
+          value = decodeURIComponent(value || "");
+          if (/^\d+(\.\d+)?$/.test(value)) {
+            value = "'" + value;
+          }
+          newRow[finalHeaderMap[key]] = value;
+        }
+      });
+    }
+
+    // Write row to sheet
+    logSheet.getRange(startRow, 1, 1, headers.length).setValues([newRow]);
+    startRow++;
+  });
+}
+function cleanDuplicatesAndSendToRawData(sheet ,dupSheet, mainSheet, logSheet, dupSheetName, baseHeaders, results, ){
+  if (!dupSheet) {
+    dupSheet = sheet.insertSheet(dupSheetName);
+  }
+  ensureColumnsExists(dupSheet, baseHeaders);
+
+  //Stage new data
+  appendRows(dupSheet, results, baseHeaders);
+
+  //etch last row from main sheet
+  const lastMainRowValues = mainSheet.getRange(mainSheet.getLastRow(), 1, 1, baseHeaders.length).getValues()[0];
+  const lastMainRow = {};
+  baseHeaders.forEach((h, i) => lastMainRow[h] = lastMainRowValues[i]);
+
+  //ompare rows
+  const newResults = getNewRowsFromDupSheetByKey(results, lastMainRow);
+  if (newResults.length > 0) {
+    //Append new rows to main sheet
+    appendRows(mainSheet, newResults, baseHeaders);
+    //Call processUrlLogs
+    processUrlLogs(logSheet, newResults, baseHeaders);
+  } else {
+    // No new rows
+  }
+
+  //Clean duplicate handler sheet
+  dupSheet.clear();
+  dupSheet.appendRow(baseHeaders);
+}
+
+//Error handling
+function getNewRowsFromDupSheetByKey(results, lastMainRow) {
+  const lastIP = lastMainRow["IP Address"];
+  const lastRequest = lastMainRow["Request"];
+  const lastTime = formatDateTimeForComparison(lastMainRow["Time"]);
+  const lastDevice = lastMainRow["Device"];
+  const lastCountry = lastMainRow["Country"];
+  const lastSize = lastMainRow["Size (bytes)"];
+  const lastResponseTime = lastMainRow["Response time (ms)"];
+  
+  let matchIndex = -1;
+
+  for (let i = 0; i < results.length; i++) {
+    if (
+      results[i]["IP Address"] === lastIP &&
+      results[i]["Request"] === lastRequest &&
+      results[i]["Time"] === lastTime &&
+      results[i]["Device"] === lastDevice &&
+      results[i]["Size (bytes)"] === lastSize &&
+      results[i]["Country"] === lastCountry &&
+      results[i]["Response time (ms)"] === lastResponseTime
+    ) {
+      matchIndex = i;
+      break;
+    }
+  }
+
+  if (matchIndex >= 0) {
+    return results.slice(matchIndex + 1);
+  } else {
+    return results;
+  }
+}
+function formatDateTimeForComparison(date) {
+  if (typeof date === "string") return date; // already string, use as is
+  if (date instanceof Date) {
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    const year = date.getFullYear();
+    let hours = date.getHours();
+    const minutes = date.getMinutes();
+    const seconds = date.getSeconds();
+    const ampm = hours >= 12 ? "PM" : "AM";
+    hours = hours % 12;
+    if (hours === 0) hours = 12;
+    const pad = (n) => n.toString().padStart(2, "0");
+    return `${month}/${day}/${year} ${hours}:${pad(minutes)}:${pad(seconds)} ${ampm}`;
+  }
+  return String(date);
+}
+function getLogTrackingData(data) { //returns the last row from prev run and the first of current run
+  const domain = data.domain;
+  const results = data.results;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+  let sheetName = domain;
+  let tab = sheet.getSheetByName(sheetName);
+  
+  const baseHeaders = ["Time", "IP Address", "Request", "Device", "Country", "Size (bytes)", "Response time (ms)"];
+  
+  // Get previous last log if tab exists
+  let previousLastLog = tab ? getPreviousLastLog(tab, baseHeaders) : null;
+  
+  // Format the Time field in previousLastLog to match incoming format
+  if (previousLastLog && previousLastLog.Time) {
+    previousLastLog.Time = formatTimeToString(previousLastLog.Time);
+  }
+  
+  // Get current first log (first row of what we just received)
+  currentFirstLog = results.length > 0 ? results[0] : null;
+  if(previousLastLog && currentFirstLog) {
+    const prevTime = new Date(previousLastLog.Time);
+    const currTime = new Date(currentFirstLog.Time);
+    
+    if(prevTime >= currTime) {
+      previousLastLog= null;
+    }
+  }
+
+  // Build response
+  return {
+    status: "received",
+    previousLastLog: previousLastLog,
+    currentFirstLog: currentFirstLog
+  };
+}
+function getPreviousLastLog(tab, headers) {
+  const lastRow = tab.getLastRow();
+  
+  // If only header row exists -> no previous log
+  if (lastRow <= 1) {
+    return null;
+  }
+  const lastRowData = tab.getRange(lastRow, 1, 1, headers.length).getValues()[0];
+  
+  // Build log
+  const logObject = {};
+  headers.forEach((header, index) => {
+    logObject[header] = lastRowData[index];
+  });
+  
+  return logObject;
+}
+function formatTimeToString(dateValue) {
+  if (!dateValue) return "";
+  
+  // If its already a string, return as-is
+  if (typeof dateValue === 'string') return dateValue;
+  
+  // Convert Date object to formatted string
+  const date = new Date(dateValue);
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const year = date.getFullYear();
+  let hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12 || 12;
+  
+  return `${month}/${day}/${year} ${hours}:${minutes}:${seconds} ${ampm}`;
+}
+
+//Check for missing headers
+function checkForMissingHeaders() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+  const allSheets = sheet.getSheets();
+
+  //Filter sheets with name starts with "Logs-"
+  const logTabs = allSheets.filter(s => /^Logs-/.test(s.getName()));
+
+  logTabs.forEach(logTab => {
+    try {
+      const data = checkForMissingHeaders_fetchData(sheet,logTab);
+      const data2 = checkForMissingHeaders_prepareData(data);
+      const data3 = checkForMissingHeaders_splitRequestToParameters(data2);
+      const data4 = checkForMissingHeaders_BuildExpectedHeaders(data3);
+      const missingHeadersList = checkForMissingHeaders_getMissingHeaders(data4);
+
+      //Send log if any missing headers
+      sendMissingHeadersLog(missingHeadersList, logTab.getName());
+
+    } catch (err) {
+    }
+  });
+}
+
+function checkForMissingHeaders_fetchData(sheet,logTab){
+  const lastCol = logTab.getLastColumn();
+  const headers = logTab.getRange(1, 1, 1, lastCol).getValues()[0];
+  
+  // Find the index of "Dev Request" column
+  const devRequestIndex = 8;
+  
+  // Copy all Request/Dev Request column values
+  const lastRow = logTab.getLastRow();
+  const requestColumn = logTab.getRange(2, devRequestIndex + 1, lastRow - 1, 1).getValues();
+  const requests = requestColumn.map(row => row[0]);
+  
+  // Get all headers to the right of Dev Request
+  const headersWeHave = [];
+  for (let i = devRequestIndex + 1; i < headers.length; i++) {
+    headersWeHave.push(headers[i].toLowerCase());
+  }
+  
+  
+  // Return data for next steps
+  return {
+    logTab: logTab,
+    requests: requests,
+    headersWeHave: headersWeHave,
+    sheet: sheet
+  };
+}
+function checkForMissingHeaders_prepareData(data) {
+  const { sheet, requests ,logTab} = data;
+
+  //Get or create Missing_Params_Check tab
+  let checkTab = sheet.getSheetByName("Missing_Params_Check");
+  if (!checkTab) {
+    checkTab = sheet.insertSheet("Missing_Params_Check");
+  } else {
+    //Clean the sheet
+    checkTab.clear();
+  }
+  
+  // Decode URLs
+  const decodedRequests = requests.map(url => {
+    if (!url) return url;
+    try {
+      return decodeURIComponent(url);
+    } catch (e) {
+      return url; // Return original if fail
+    }
+  });
+  
+  // Paste decoded requests to column A
+  checkTab.getRange(1, 1).setValue("Request");
+  if (decodedRequests.length > 0) {
+    const requestsAsRows = decodedRequests.map(r => [r]);
+    checkTab.getRange(2, 1, decodedRequests.length, 1).setValues(requestsAsRows);
+  }
+  
+  return {
+    ...data,
+    checkTab: checkTab,
+    decodedRequests: decodedRequests
+  };
+}
+function checkForMissingHeaders_splitRequestToParameters(data){
+  const { checkTab, decodedRequests} = data;
+  //Add header for column B
+  checkTab.getRange(1, 2).setValue("Parameters");
+  
+  const parametersData = extractQueryStrings(decodedRequests,"?");
+  
+  // Write parameters to column B
+  if (parametersData.length > 0) {
+    const paramsAsRows = parametersData.map(p => [p]);
+    checkTab.getRange(2, 2, parametersData.length, 1).setValues(paramsAsRows);
+  }
+  
+  //Remove duplicate rows
+  const lastRow = checkTab.getLastRow();
+  if (lastRow > 2) {
+    const allData = checkTab.getRange(2, 1, lastRow - 1, 2).getValues();
+    const seen = new Set();
+    let rowsToDelete = [];
+    
+    for (let i = 0; i < allData.length; i++) {
+      const paramValue = allData[i][1]; // Column B value
+      if (seen.has(paramValue)) {
+        rowsToDelete.push(i + 2); // Add 2 because data starts at row 2
+      }
+      seen.add(paramValue);
+    }
+    
+    //Delete rows in reverse to avoid index shifting
+    for (let i = rowsToDelete.length - 1; i >= 0; i--) {
+      checkTab.deleteRow(rowsToDelete[i]);
+    }
+  } 
+  splitColumnByAmpersand(checkTab,2);
+  return data;
+}
+function checkForMissingHeaders_BuildExpectedHeaders(data) {
+  const { checkTab } = data;
+
+  const lastRow = checkTab.getLastRow();
+  const lastCol = checkTab.getLastColumn();
+
+  if (lastRow < 2 || lastCol < 2) return { ...data, expectedHeaders: [] };
+
+  // Read all parameter cells
+  const range = checkTab.getRange(2, 2, lastRow - 1, lastCol - 1);
+  const values = range.getValues();
+
+  const expectedHeadersSet = new Set();
+
+  values.forEach(row => {
+    for (let col = 0; col < row.length; col++) {
+      const cell = row[col];
+      if (!cell) continue; // skip empty cells
+      const eqIndex = cell.indexOf("=");
+      if (eqIndex === -1) continue; // skip if no "="
+      const key = cell.slice(0, eqIndex).trim().toLowerCase();
+      expectedHeadersSet.add(key);
+    }
+  });
+
+  const expectedHeaders = Array.from(expectedHeadersSet);
+
+  return { ...data, expectedHeaders };
+}
+function checkForMissingHeaders_getMissingHeaders(data) {
+  const {headersWeHave, expectedHeaders} = data;
+  //Normalize headersWeHave to lowercase for comparison
+  const headersSet = new Set(headersWeHave.map(h => h.toLowerCase()));
+
+  //Return only those in expectedHeaders but not in headersWeHave
+  const missingHeaders = expectedHeaders.filter(h => !headersSet.has(h.toLowerCase()));
+
+  return missingHeaders;
+}
+function sendMissingHeadersLog(missingHeadersList,sheetName) {
+  if (!missingHeadersList || missingHeadersList.length === 0) return;
+
+  const logJson = {
+    machineName: "Error handler local",
+    logs: `Found missing columns that should have been in the sheet: ${sheetName}
+Headers missing: ${missingHeadersList.join(", ")}`
+  };
+  handleMachineLogAsync(logJson);
+}
+
+//Fix duplicate rows coming from hoistinger
+function getOrCreateSheet(spreadsheet, name, headers) {
+  let sheet = spreadsheet.getSheetByName(name);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(name);
+    sheet.appendRow(headers);
+  }
+  return sheet;
+}
+function appendRows(sheet, data, baseHeaders) {
+  if (!data || data.length === 0) return;
+
+  // First Run
+  if (typeof data[0] === 'object' && !Array.isArray(data[0])) {
+    const rows = data.map(obj => baseHeaders.map(h => obj[h] || ""));
+    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  }
+  //Not First Run
+  else if (Array.isArray(data[0])) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, data.length, data[0].length).setValues(data);
+  }
+}
+function getNewRowsFromDupSheet(dupSheet, lastMainRow) {
+  const lastRowIndex = dupSheet.getLastRow();
+  const dupData = dupSheet.getRange(2, 1, lastRowIndex - 1, lastMainRow.length).getDisplayValues();
+
+  const mainRowAsStrings = lastMainRow.map(String);
+
+  let matchIndex = -1;
+  for (let i = 0; i < dupData.length; i++) {
+    const row = dupData[i].map(String);
+    if (arraysEqual(row, mainRowAsStrings)) {
+      matchIndex = i;
+      break;
+    }
+  }
+
+  if (matchIndex >= 0) {
+    return dupData.slice(matchIndex + 1);
+  } else {
+    return dupData;
+  }
+}
+function arraysEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+//Sheet actions
+function splitColumnByAmpersand(sheet, columnIndex) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return; // no data
+
+  //Read all values from column
+  const values = sheet.getRange(2, columnIndex, lastRow - 1, 1).getValues();
+
+  //Split each cell by "&"
+  const splitRows = values.map(row => {
+    const cell = row[0];
+    return typeof cell === "string" && cell.length > 0 ? cell.split("&") : [""];
+  });
+
+  // Determine max columns
+  const maxCols = Math.max(...splitRows.map(r => r.length));
+
+  // Pad shorter rows
+  const normalized = splitRows.map(r => {
+    while (r.length < maxCols) r.push("");
+    return r;
+  });
+  sheet.getRange(2, columnIndex, lastRow - 1, sheet.getLastColumn() - columnIndex + 1).clearContent();
+  sheet.getRange(2, columnIndex, normalized.length, maxCols).setValues(normalized);
+}
+function extractQueryStrings(urls,delimiter) {
+  return urls.map(url => {
+    if (!url) return "";
+    const parts = url.split(delimiter);
+    return parts.length > 1 ? parts[1] : "";
+  });
+}
+function ensureColumnsExists(sheet, requiredColumns) {
+  let lastCol = sheet.getLastColumn();
+  const headerRow = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+
+  requiredColumns.forEach(col => {
+    if (!headerRow.includes(col)) {
+      sheet.getRange(1, sheet.getLastColumn() + 1).setValue(col);
+    }
+  });
+  sheet.getRange(1, 1, 1, requiredColumns.length).setBackground("#93CCEA");
+}
+function formatTimestamp() { // returns a timestamp for now
+    const now = new Date();
+    const formatted = Utilities.formatDate(now, Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss');
+    return formatted;
+}
+function formatResultsDateTime(results) {
+  return results.map(r => {
+    if (r["Time"]) {
+      const d = new Date(r["Time"]);
+      if (!isNaN(d.getTime())) {
+        r["Time"] = Utilities.formatDate(d, Session.getScriptTimeZone(), "M/d/yyyy h:mm:ss a");
+      }
+    }
+    return r;
+  });
+}
+function getOriginalTab(logSheet) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+  const originalTabName = logSheet.getName().replace('Logs-', '');
+  const originalTab = sheet.getSheetByName(originalTabName);
+  return originalTab;
+}
+function createHeaderMap(finalHeaders) {
+  const headerMap = {};
+  finalHeaders.forEach((h, idx) => headerMap[h.toLowerCase()] = idx);
+  return headerMap;
+}
+
+//QA
+function testHandleAccessLogs() {
+  const testData = {
+    domain: "test2",
+    results: [
+      {
+        "Time": "9/21/2025 6:59:47 AM",
+        "IP Address": "20.20.20.20.20",
+        "Request": "GET /manual-finder/?test=1 HTTP/1.1",
+        "Device": "Chrome",
+        "Country": "US",
+        "Size (bytes)": 123,
+        "Response time (ms)": 456
+      }
+    ]
+  };
+
+  handleAccessLogs(testData);
+}
