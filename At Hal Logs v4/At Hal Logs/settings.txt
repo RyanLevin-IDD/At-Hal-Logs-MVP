@@ -1,6 +1,0 @@
-﻿Email=
-Password=
-TimeFilter=
-ChromeProfile=Automation
-SheetAPI=
-TimerEnabled= false
