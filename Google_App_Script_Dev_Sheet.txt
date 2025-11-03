@@ -302,8 +302,10 @@ function processUrlLogs(logSheet, results, passedOriginalHeaders = null,startInd
     logSheet.getRange(currentRow, 1, 1, headers.length).setValues([row]);
     currentRow++;
   });
-  // Send rows to external API
+  //Send rows to external API
   newheaders = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
+  newData = getRowsFromSheet(logSheet, startIndex);
+  newData = newData.map(row => row.map(cell => formatDateToSheet(cell)));
   if(startIndex == 0){
     sendRowsToExternalSheet(rowsToWrite, newheaders, logSheet.getName());
     }
@@ -312,6 +314,22 @@ function processUrlLogs(logSheet, results, passedOriginalHeaders = null,startInd
   }  
 }
 
+function formatDateToSheet(cell) {
+  if (cell instanceof Date) {
+    return Utilities.formatDate(cell, Session.getScriptTimeZone(), "M/d/yyyy h:mm:ss a");
+  }
+  return cell;
+}
+
+function getRowsFromSheet(sheet, startIndex) {
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+   if (startIndex < 1) startIndex = 1;
+  if (startIndex > lastRow) return [];
+
+  const numRows = lastRow - startIndex + 1;
+  return sheet.getRange(startIndex, 1, numRows, lastCol).getValues();
+}
 function cleanDuplicatesAndSendToRawData(sheet, mainSheet, baseHeaders, results, logSheet) {
   if (!results || results.length === 0) {
     return;
@@ -328,6 +346,7 @@ function cleanDuplicatesAndSendToRawData(sheet, mainSheet, baseHeaders, results,
   clearRowsFromIndex(logSheet, startIndex)
   processUrlLogs(logSheet, results, baseHeaders, startIndex);
 }
+
 function clearRowsFromIndex(sheet, startIndex) {
   const lastRow = sheet.getLastRow();
   if (startIndex > lastRow) return; // nothing to clear
@@ -336,6 +355,59 @@ function clearRowsFromIndex(sheet, startIndex) {
   sheet.getRange(startIndex, 1, numRows, sheet.getLastColumn()).clearContent();
 }
 
+//Error handling
+function getNewRowsFromDupSheetByKey(results, lastMainRow) {
+  const lastIP = String(lastMainRow["IP Address"]).trim();
+  const lastRequest = String(lastMainRow["Request"]).trim();
+  const lastTime = normalizeTimeFormat(lastMainRow["Time"]);
+  const lastDevice = String(lastMainRow["Device"]).trim();
+  const lastCountry = String(lastMainRow["Country"]).trim();
+  const lastSize = Number(lastMainRow["Size (bytes)"]);
+  const lastResponseTime = Number(lastMainRow["Response time (ms)"]);
+  
+  let matchIndex = -1;
+
+  for (let i = 0; i < results.length; i++) {
+    const currentTime = normalizeTimeFormat(results[i]["Time"]);
+    
+    if (
+      String(results[i]["IP Address"]).trim() === lastIP &&
+      String(results[i]["Request"]).trim() === lastRequest &&
+      currentTime === lastTime &&
+      String(results[i]["Device"]).trim() === lastDevice &&
+      Number(results[i]["Size (bytes)"]) === lastSize &&
+      String(results[i]["Country"]).trim() === lastCountry &&
+      Number(results[i]["Response time (ms)"]) === lastResponseTime
+    ) {
+      matchIndex = i;
+      break;
+    }
+  }
+
+  if (matchIndex >= 0) {
+    return results.slice(matchIndex + 1);
+  } else {
+    return results;
+  }
+}
+
+function formatDateTimeForComparison(date) {
+  if (typeof date === "string") return date; // already string, use as is
+  if (date instanceof Date) {
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    const year = date.getFullYear();
+    let hours = date.getHours();
+    const minutes = date.getMinutes();
+    const seconds = date.getSeconds();
+    const ampm = hours >= 12 ? "PM" : "AM";
+    hours = hours % 12;
+    if (hours === 0) hours = 12;
+    const pad = (n) => n.toString().padStart(2, "0");
+    return `${month}/${day}/${year} ${hours}:${pad(minutes)}:${pad(seconds)} ${ampm}`;
+  }
+  return String(date);
+}
 function getLogTrackingData(data) { //returns the last row from prev run and the first of current run
   const domain = data.domain;
   const results = data.results;
@@ -580,6 +652,15 @@ Headers missing: ${missingHeadersList.join(", ")}`
   handleMachineLogAsync(logJson);
 }
 
+//Fix duplicate rows coming from hoistinger
+function getOrCreateSheet(spreadsheet, name, headers) {
+  let sheet = spreadsheet.getSheetByName(name);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(name);
+    sheet.appendRow(headers);
+  }
+  return sheet;
+}
 function appendRows(sheet, data, baseHeaders) {
   if (!data || data.length === 0) return;
 
@@ -593,7 +674,6 @@ function appendRows(sheet, data, baseHeaders) {
     sheet.getRange(sheet.getLastRow() + 1, 1, data.length, data[0].length).setValues(data);
   }
 }
-
 function overwriteRows(sheet, data, baseHeaders, startRow) {
   if (!data || data.length === 0) return;
 
@@ -609,6 +689,27 @@ function overwriteRows(sheet, data, baseHeaders, startRow) {
   sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
 }
 
+function getNewRowsFromDupSheet(dupSheet, lastMainRow) {
+  const lastRowIndex = dupSheet.getLastRow();
+  const dupData = dupSheet.getRange(2, 1, lastRowIndex - 1, lastMainRow.length).getDisplayValues();
+
+  const mainRowAsStrings = lastMainRow.map(String);
+
+  let matchIndex = -1;
+  for (let i = 0; i < dupData.length; i++) {
+    const row = dupData[i].map(String);
+    if (arraysEqual(row, mainRowAsStrings)) {
+      matchIndex = i;
+      break;
+    }
+  }
+
+  if (matchIndex >= 0) {
+    return dupData.slice(matchIndex + 1);
+  } else {
+    return dupData;
+  }
+}
 function arraysEqual(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -777,26 +878,8 @@ function testHandleAccessLogs() {
     domain: "test5",
     results: [
     {
-        "Time": "9/21/2025 9:45:51 AM",
-        "IP Address": "20.51.31.22.20",
-        "Request": "GET /manual-finder/?ryan2323=12&lol3=34&product=2004%20dodge%20dakota%20repair%20manual%20pdf%20free&utm_source=bing-search&request=test5&utm_term=pdf%20owners%20manuals%20for%20cars-2004%20dodge%20dakota%20repair%20manual%20pdf%20free&msclkid=b7ce051bd68c107215216dd40ecadf4&tfffypr=0&request=test1 HTTP/1.1",
-        "Device": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0",
-        "Country": "United States",
-        "Size (bytes)": 35373,
-        "Response time (ms)": 296
-    },
-    {
-        "Time": "9/21/2025 9:45:52 AM",
-        "IP Address": "20.51.31.22.20",
-        "Request": "GET /manual-finder/?ryan2323=12&lol3=34&product=2004%20dodge%20dakota%20repair%20manual%20pdf%20free&utm_source=bing-search&request=test5&utm_term=pdf%20owners%20manuals%20for%20cars-2004%20dodge%20dakota%20repair%20manual%20pdf%20free&msclkid=b7ce051bd68c107215216dd40ecadf4&tfffypr=0&request=test1 HTTP/1.1",
-        "Device": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0",
-        "Country": "United States",
-        "Size (bytes)": 35373,
-        "Response time (ms)": 296
-    },
-    {
-        "Time": "9/21/2025 9:45:52 AM",
-        "IP Address": "20.51.31.32.20",
+        "Time": "9/21/2025 9:45:53 AM",
+        "IP Address": "20.51.41.22.20",
         "Request": "GET /manual-finder/?ryan2323=12&lol3=34&product=2004%20dodge%20dakota%20repair%20manual%20pdf%20free&utm_source=bing-search&request=test5&utm_term=pdf%20owners%20manuals%20for%20cars-2004%20dodge%20dakota%20repair%20manual%20pdf%20free&msclkid=b7ce051bd68c107215216dd40ecadf4&tfffypr=0&request=test1 HTTP/1.1",
         "Device": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0",
         "Country": "United States",
@@ -805,17 +888,17 @@ function testHandleAccessLogs() {
     },
     {
         "Time": "9/21/2025 9:45:53 AM",
-        "IP Address": "20.51.31.22.20",
-        "Request": "GET /manual-finder/?ryan2323=12&lol3=34&product=2004%20dodge%20dakota%20repair%20manual%20pdf%20free&utm_source=bing-search&request=test5&utm_term=pdf%20owners%20manuals%20for%20cars-2004%20dodge%20dakota%20repair%20manual%20pdf%20free&msclkid=b7ce051bd68c107215216dd40ecadf4&tfffypr=0&request=test1 HTTP/1.1",
+        "IP Address": "20.51.71.22.20",
+        "Request": "GET /manual-finder/?newVarll=10 HTTP/1.1",
         "Device": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0",
         "Country": "United States",
         "Size (bytes)": 35373,
         "Response time (ms)": 296
     },
     {
-        "Time": "9/21/2025 9:45:54 AM",
-        "IP Address": "20.51.31.22.20",
-        "Request": "GET /manual-finder/?ryan2323=12&lol3=34&product=2004%20dodge%20dakota%20repair%20manual%20pdf%20free&utm_source=bing-search&request=test5&utm_term=pdf%20owners%20manuals%20for%20cars-2004%20dodge%20dakota%20repair%20manual%20pdf%20free&msclkid=b7ce051bd68c107215216dd40ecadf4&tfffypr=0&request=test1 HTTP/1.1",
+        "Time": "9/21/2025 9:45:55 AM",
+        "IP Address": "20.51.41.22.20",
+        "Request": "GET /manual-finder/?bo=10&lo=10 HTTP/1.1",
         "Device": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0",
         "Country": "United States",
         "Size (bytes)": 35373,
