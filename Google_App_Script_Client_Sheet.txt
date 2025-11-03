@@ -67,28 +67,29 @@ function handleUrlLogs(data) {
 }
 
 function ensureHeadersExist(tab, requiredHeaders) {
-  const lastCol = tab.getLastColumn();
-  const existingHeaders = lastCol > 0 
-    ? tab.getRange(1, 1, 1, lastCol).getValues()[0]
-    : [];
-
-  if (existingHeaders.length === 0 || existingHeaders[0] === "") {
-    //First time: set all headers
+  isHeadersTheSame = isHeadersTheSame(tab,requiredHeaders);
+  if (isHeadersTheSame) {return;}
+  else
+  {
     tab.getRange(1, 1, 1, requiredHeaders.length).setValues([requiredHeaders]);
     colorHeaderRow(tab, requiredHeaders.length);
-    return;
-  }
-
-  //Add any new headers not yet present
-  const newHeaders = requiredHeaders.filter(h => !existingHeaders.includes(h));
-
-  if (newHeaders.length > 0) {
-    const updatedHeaders = [...existingHeaders, ...newHeaders];
-    tab.getRange(1, 1, 1, updatedHeaders.length).setValues([updatedHeaders]);
-    colorHeaderRow(tab, updatedHeaders.length);
   }
 }
 
+function isHeadersTheSame(tab, requiredHeaders) {
+  const lastCol = tab.getLastColumn();
+  if (lastCol !== requiredHeaders.length) return false;
+
+  const existingHeaders = tab.getRange(1, 1, 1, lastCol).getValues()[0];
+
+  for (let i = 0; i < requiredHeaders.length; i++) {
+    if (existingHeaders[i] !== requiredHeaders[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 function colorHeaderRow(tab, headerCount) {
   //Color first 8 columns in blue
