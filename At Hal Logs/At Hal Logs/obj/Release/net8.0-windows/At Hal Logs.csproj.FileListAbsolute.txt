@@ -1,0 +1,24 @@
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\At Hal Logs.exe
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\At Hal Logs.deps.json
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\At Hal Logs.runtimeconfig.json
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\At Hal Logs.dll
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\At Hal Logs.pdb
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\Newtonsoft.Json.dll
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\WebDriver.Support.dll
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\WebDriver.dll
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\runtimes\linux\native\selenium-manager
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\runtimes\osx\native\selenium-manager
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\bin\Release\net8.0-windows\runtimes\win\native\selenium-manager.exe
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At Hal Logs.csproj.AssemblyReference.cache
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At_Hal_Logs.AppWindow.resources
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At Hal Logs.csproj.GenerateResource.cache
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At Hal Logs.GeneratedMSBuildEditorConfig.editorconfig
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At Hal Logs.AssemblyInfoInputs.cache
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At Hal Logs.AssemblyInfo.cs
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At Hal Logs.csproj.CoreCompileInputs.cache
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At Hal L.749A1BD7.Up2Date
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At Hal Logs.dll
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\refint\At Hal Logs.dll
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At Hal Logs.pdb
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\At Hal Logs.genruntimeconfig.cache
+D:\251021_AT_HAL_logsV3\At Hal Logs\At Hal Logs\obj\Release\net8.0-windows\ref\At Hal Logs.dll
