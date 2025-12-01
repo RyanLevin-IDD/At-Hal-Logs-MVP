@@ -85,23 +85,9 @@ namespace At_Hal_Logs
                 }
                 WebDriverWait wait = new WebDriverWait(_driver, TimeSpan.FromSeconds(Globals.FINDING_ELEMENT_TIMEOUT));
                 var domains = await GetDomainsFromSheetAPI();
-
-                //Get THE STARING HOUR TIMEFRAME
-                string dateYesterday = getTimeFrame();
-
-
-                //For each domain
-                for (int i = 0; i < domains.Length; i++)
-                {
-                    if (token.IsCancellationRequested)
-                    {
-                        txtLogs.Text += Environment.NewLine + "Run stopped by user.";
-                        doneBox.Text = "Run Stopped";
-                        return;
-                    }
-                    await Task.Delay(1000);
-                    await ProcessDomainLogs(_driver, domains[i], wait, token, dateYesterday);
-                }
+                string startHour = getTimeFrame();
+                await Task.Delay(1000);
+                await ProcessDomainLogs(_driver, domains, wait, token, startHour);
             }
             catch (OperationCanceledException)
             {
@@ -109,7 +95,7 @@ namespace At_Hal_Logs
             }
             catch (Exception ex)
             {
-                await SendInfoLogsToSheetAPI(ex.Message);
+                //await SendInfoLogsToSheetAPI(ex.Message);
                 txtLogs.Text += Environment.NewLine + $"ERROR: {ex.Message}\n{ex.StackTrace}";
             }
             finally
@@ -172,9 +158,10 @@ namespace At_Hal_Logs
             try
             {
                 WaitForDomReady(driver);
+                Thread.Sleep(1000);
                 //Click on "accese logs" tab
                 var acceseLogsTab = WaitForElementById(driver, Globals.acceseLogsTab_Id);
-                if(acceseLogsTab == null)
+                if (acceseLogsTab == null)
                 {
                     return false;
                 }
@@ -271,122 +258,40 @@ namespace At_Hal_Logs
             return false;
         }
 
-        //Fetch all logs from a single page
-        private (List<Dictionary<string, string>> Rows, bool IsDone) ScrapeAccessLogs(ChromeDriver driver, string dateYesterday, int startIndex, bool firstRun)
+        /// <summary>
+        /// Scrape a single page for logs that have our "startHour" in the timestamp
+        /// Going from top to buttom -> add all valid rows to our results
+        /// </summary>
+        /// <param name="driver">chrome web driver</param>
+        /// <param name="startHour"> string representing the hour we are looking to see for logs in our results</param>
+        /// <param name="startIndex">the first row we should start from (only releveant on the first pass, other calls will start from the top row)</param>
+        /// <param name="firstRun">boolean state</param>
+        /// <returns>Rows: array of rows we want in the results, IsDone: boolean state, did we reach the last results available</returns>
+        private (List<Dictionary<string, string>> Rows, bool IsDone) ScrapeAccessLogs(ChromeDriver driver,string startHour,int startIndex,bool firstRun)
         {
             var allRows = new List<Dictionary<string, string>>();
-            int _startIndex = 0;
             bool isDone = false;
-            try
-                {
-                    var rows = driver.FindElements(By.CssSelector(".access-logs__table-row"));
-                    string todayString = DateTime.Today.ToString("yyyy-MM-dd");
+            if (!int.TryParse(startHour, out int hourToFind))
+                throw new Exception("Invalid startHour value. Must be an integer hour string.");
 
-                    if (firstRun)
-                    {
-                        if (startIndex == 0)
-                        {
-                            _startIndex = rows.Count - 1; //Start from the buttom
-                        }
-                        else
-                        {
-                            _startIndex = startIndex - 1; //start from the last index
-                        }
-                        // Go up (newer rows below)
-                        for (int i = _startIndex; i >= 0; i--)
-                        {
-                            Thread.Sleep(100);
-                            var row = rows[i];
-                            var cells = row.FindElements(By.CssSelector(".access-logs__table-item"));
-                            ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", row);
-
-                            string timeText = cells[0].Text.Trim();
-                            if (timeText.Length < 10)
-                                continue;
-
-                            string rowDate = timeText.Substring(0, 10);
-
-                            // Stop when reaching today's date
-                            if (rowDate == todayString)
-                            {
-                                isDone = true;
-                                break;
-                            }
-
-                            var rowData = new Dictionary<string, string>
-                            {
-                                ["Time"] = timeText,
-                                ["IP Address"] = cells[1].Text.Trim(),
-                                ["Request"] = cells[2].Text.Trim(),
-                                ["Device"] = cells[3].Text.Trim(),
-                                ["Country"] = cells[4].Text.Trim(),
-                                ["Size (bytes)"] = cells[5].Text.Trim(),
-                                ["Response time (ms)"] = cells[6].Text.Trim()
-                            };
-
-                            allRows.Add(rowData);
-                        }
-                    }
-                    else
-                    {
-
-                        // Go upward (from bottom to top)
-                        for (int i = rows.Count - 1; i >= 0; i--)
-                        {
-                            Thread.Sleep(100);
-                            var row = rows[i];
-                            var cells = row.FindElements(By.CssSelector(".access-logs__table-item"));
-                            ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", row);
-
-                            string timeText = cells[0].Text.Trim();
-                            if (timeText.Length < 10)
-                                continue;
-
-                            string rowDate = timeText.Substring(0, 10);
-
-                            // Stop when reaching today's date
-                            if (rowDate == todayString)
-                            {
-                                isDone = true;
-                                break;
-                            }
-
-                            var rowData = new Dictionary<string, string>
-                            {
-                                ["Time"] = timeText,
-                                ["IP Address"] = cells[1].Text.Trim(),
-                                ["Request"] = cells[2].Text.Trim(),
-                                ["Device"] = cells[3].Text.Trim(),
-                                ["Country"] = cells[4].Text.Trim(),
-                                ["Size (bytes)"] = cells[5].Text.Trim(),
-                                ["Response time (ms)"] = cells[6].Text.Trim()
-                            };
-
-                            allRows.Add(rowData);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    txtLogs.Text += Environment.NewLine + $"Error scraping logs: {ex.Message}";
-                }
-
-            return (allRows, isDone);
-        }
-
-        private (bool Found, int StartIndex, bool NoNewLogs, int rowsCount) FindStartingRow(ChromeDriver driver, int daysAgoToAnalyze)
-        {
-            bool found = false;
-            int startIndex = -1;
-            bool noNewLogs = false;
-            int rowsCount = 100;
+            DateTime cutoff = new DateTime(
+                DateTime.Now.Year,
+                DateTime.Now.Month,
+                DateTime.Now.Day,
+                hourToFind,
+                59,
+                59
+            );
             try
             {
-                string dateToFind = DateTime.Now.AddDays(daysAgoToAnalyze).ToString("yyyy-MM-dd");
                 var rows = driver.FindElements(By.CssSelector(".access-logs__table-row"));
-                rowsCount = rows.Count;
-                for (int i = 0; i < rows.Count; i++)
+
+                // Determine start row
+                int iStart = firstRun ? startIndex : 0;
+
+                for (int i = iStart; i < rows.Count; i++)
                 {
+                    Thread.Sleep(200);
                     var row = rows[i];
                     var cells = row.FindElements(By.CssSelector(".access-logs__table-item"));
 
@@ -394,15 +299,119 @@ namespace At_Hal_Logs
                         continue;
 
                     ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", row);
+                    string timestampText = cells[0].Text.Trim();
+                    if (!DateTime.TryParse(timestampText, out DateTime rowTime))
+                        continue;
+
+                    int rowHour = rowTime.Hour;
+
+                    // Stop condition: log is NEWER than machine time
+                    if (rowTime > cutoff)
+                    {
+                        //Done
+                        isDone = true;
+                        break;
+                    }
+
+                    // If hours match -> add to results
+                    if (rowHour == hourToFind)
+                    {
+                        var rowData = new Dictionary<string, string>
+                        {
+                            ["Time"] = timestampText,
+                            ["IP Address"] = cells[1].Text.Trim(),
+                            ["Request"] = cells[2].Text.Trim(),
+                            ["Device"] = cells[3].Text.Trim(),
+                            ["Country"] = cells[4].Text.Trim(),
+                            ["Size (bytes)"] = cells[5].Text.Trim(),
+                            ["Response time (ms)"] = cells[6].Text.Trim()
+                        };
+
+                        allRows.Add(rowData);
+                    }
+
+                    // Continue scanning to next row
+                }
+            }
+            catch (Exception ex)
+            {
+                txtLogs.Text += Environment.NewLine + $"Error scraping logs: {ex.Message}";
+            }
+
+            return (allRows, isDone);
+        }
+
+        /// <summary>
+        /// Look for the first row that have our start time
+        /// </summary>
+        /// <param name="startHour"> the hour we are looking for in the logs </param>
+        /// <returns>
+        /// - Found: have we found the starting row
+        /// - StartIndex: the index in the table which holds the starting row
+        /// - noNewLogs: true if we dont have any logs for that hour
+        /// - rowsCount: how many rows the table holds
+        /// </returns>
+        private (bool Found, int StartIndex, bool NoNewLogs, int rowsCount) FindStartingRow(ChromeDriver driver, string startHour)
+        {
+            bool found = false;
+            int startIndex = -1;
+            bool noNewLogs = false;
+            int rowsCount = 100;
+            if (!int.TryParse(startHour, out int hourToFind))
+                throw new Exception("Invalid startHour value. Must be an integer hour string.");
+            try
+            {
+                var rows = driver.FindElements(By.CssSelector(".access-logs__table-row"));
+                rowsCount = rows.Count;
+                DateTime now = DateTime.Now;
+                int currentMonth = now.Month;
+                int currentDay = now.Day;
+
+                for (int i = 0; i < rows.Count; i++)
+                {
+                    var row = rows[i];
+                    var cells = row.FindElements(By.CssSelector(".access-logs__table-item"));
+                    if (cells.Count == 0)
+                        continue;
+
+                    ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", row);
 
                     string timeText = cells[0].Text.Trim();
+                    if (!DateTime.TryParse(timeText, out DateTime logTimestamp))
+                        continue;
 
-                    // If the time column contains dateYesterday
-                    if (timeText.Contains(dateToFind))
+                    int logHour = logTimestamp.Hour;
+
+                    // Check if no logs for that hour
+                    if (logTimestamp.Month == currentMonth && logTimestamp.Day == currentDay && logHour > hourToFind)
+                    {
+                        noNewLogs = true;
+                        break;
+                    }
+
+                    //If the row matches our hour
+                    if (logHour == hourToFind)
                     {
                         found = true;
                         startIndex = i;
                         break;
+                    }
+                }
+
+                // Reached the bottom and no match
+                if (!found)
+                {
+                    // TODO Check if pagination shows 10,000 results
+                    if (false)
+                    {
+                        // TODO: send email and log to sheet
+                        // "Could not find the hour {startHour}, more than 10,000 results"
+                        // Schedule next run for X/2 minutes
+                    }
+                    else
+                    {
+                        // Normal case: simply no logs for that hour
+                        noNewLogs = true;
                     }
                 }
             }
@@ -410,11 +419,10 @@ namespace At_Hal_Logs
             {
                 txtLogs.Text += Environment.NewLine + $"Error finding starting row: {ex.Message}";
             }
-
             return (found, startIndex, noNewLogs, rowsCount);
         }
-        //Fetch all logs for the domain and send them to the sheet
-        private async Task ProcessDomainLogs(ChromeDriver driver, string domain, WebDriverWait wait, CancellationToken token, string dateYesterday)
+
+        private async Task ProcessDomainLogs(ChromeDriver driver, string domain, WebDriverWait wait, CancellationToken token, string startHour)
         {
             //Make sure domain is available
             bool websiteDahsboardReady = await NavigateToWebsitesAsync(domain, driver, wait, token);
@@ -425,16 +433,16 @@ namespace At_Hal_Logs
             if (!acceseLogsPressed)
             {
                 //Send logs and continue to next domain
-                await SendInfoLogsToSheetAPI($"Could not find access logs tab for domain:{domain}\n" +
-                    $"Continue to next domain");
+                //await SendInfoLogsToSheetAPI($"Could not find access logs tab for domain:{domain}\n" +
+                    //$"Continue to next domain");
                 return;
             }
-            //Press 24h
+            //Press Last logs from X time ago 
             var timeFilterElement = GetTimeSelection(driver);
             timeFilterElement.Click();
 
             bool logsFound = await WaitForLogsList(driver, TimeSpan.FromMinutes(1));
-            if (!logsFound) 
+            if (!logsFound)
             {
                 txtLogs.Text += Environment.NewLine + "Logs not found after 1 minute";
                 return;
@@ -443,10 +451,10 @@ namespace At_Hal_Logs
             int totalPages = CalculateLogPages(driver, domain);
             string domainName = domain;
             //Find the starting row page
-            var (found, startIndex, pageNumber, isNewLogs) = await FindStartingRowAsync(driver, wait, totalPages, dateYesterday, token, domain);
+            var (found, startIndex, pageNumber, isNewLogs) = await FindStartingRowAsync(driver, wait, totalPages, startHour, token, domain);
 
             //Scrape
-            List <Dictionary<string, string>> allLogs = await ScrapeLogsFromPageAsync(driver,wait,dateYesterday,pageNumber,startIndex,token);
+            List<Dictionary<string, string>> allLogs = await ScrapeLogsFromPageAsync(driver, wait, startHour, pageNumber, startIndex, token, totalPages);
             int rowsInResults = allLogs.Count;
             txtLogs.Text += Environment.NewLine + "Done analyzing logs, Sending to sheet";
             // Send to Sheet
@@ -458,32 +466,20 @@ namespace At_Hal_Logs
 
 
 
-        private async Task<(bool Found, int StartIndex, int PageNumber, bool NewLogs)> FindStartingRowAsync(ChromeDriver driver, WebDriverWait wait, int totalPages, string dateToFind, CancellationToken token, string domain)
+        private async Task<(bool Found, int StartIndex, int PageNumber, bool NewLogs)> FindStartingRowAsync(ChromeDriver driver, WebDriverWait wait, int totalPages, string startHour, CancellationToken token, string domain)
         {
             bool found = false;
             int startIndex = -1;
             int pageNumber = -1;
             bool newLogs = true;
             txtLogs.Text += Environment.NewLine + "Looking for the starting row";
-            //check missing logs last run
-            Dictionary<string, string> lastRowFromSheet = null;
-            try
-            {
-                lastRowFromSheet = await GetLastRowFromSheet(domain);
-            }
-            catch (Exception ex){}
-            int daysAgoToAnalyze = -2; //yesterday
-            if (lastRowFromSheet != null)
-            {
-                daysAgoToAnalyze = calculateHowManyDays(lastRowFromSheet);
-            }
             for (int page = 1; page <= totalPages; page++)
             {
                 token.ThrowIfCancellationRequested();
                 wait.Until(d => ((IJavaScriptExecutor)d).ExecuteScript("return document.readyState").Equals("complete"));
                 await Task.Delay(1000, token);
                 wait.Until(d => d.FindElement(By.CssSelector(".access-logs__table-row")));
-                var (startingRowFound, startIdx, isNewLogs, rowsCount) = FindStartingRow(driver, daysAgoToAnalyze);
+                var (startingRowFound, startIdx, isNewLogs, rowsCount) = FindStartingRow(driver, startHour);
                 if (startingRowFound)
                 {
                     found = true;
@@ -501,46 +497,26 @@ namespace At_Hal_Logs
                     nextPageButton.Click();
                     WaitForElement(driver, Globals.tableElement_Xpath);
                 }
-                else
+                else //TODO: NO next row check for 10,000 and resolve
                 {
                     found = true;
                     startIndex = rowsCount - 1; //last row
                     newLogs = true;
                     pageNumber = page;
                     txtLogs.Text += Environment.NewLine + "Reached end page and starting row not found";
-                    await SendInfoLogsToSheetAPI("Reached the last page, Hostinger do not show older logs\n"+"Fetching everything available");
+                    //await SendInfoLogsToSheetAPI("Reached the last page, Hostinger do not show older logs\n" + "Fetching everything available");
 
                 }
             }
 
             return (found, startIndex, pageNumber, newLogs);
         }
-        private int calculateHowManyDays(Dictionary<string, string> lastRowInSheet)
-        {
-            // Extract text
-            if (!lastRowInSheet.TryGetValue("Time", out string timeString))
-                return -6;
-
-            // Parse the date from sheet
-            if (!DateTime.TryParse(timeString, out DateTime rowDate))
-                return -6;
-
-            // Compare dates only
-            int daysAgo = (DateTime.Now.Date - rowDate.Date).Days;
-
-            // Valid only if 2–6 days ago
-            if (daysAgo >= 2 && daysAgo <= 6)
-                return -daysAgo;
-
-            // Anything else -> default -6
-            return -6;
-        }
-        private async Task<List<Dictionary<string, string>>> ScrapeLogsFromPageAsync(ChromeDriver driver, WebDriverWait wait, string dateYesterday, int startPage, int startIndex, CancellationToken token)
+        private async Task<List<Dictionary<string, string>>> ScrapeLogsFromPageAsync(ChromeDriver driver, WebDriverWait wait, string startHour, int startPage, int startIndex, CancellationToken token, int totalPages)
         {
             List<Dictionary<string, string>> logs = new List<Dictionary<string, string>>();
             bool isDone = false;
             bool firstRun = true;
-            for (int page = startPage; page > 0; page--)
+            for (int page = startPage; page <= totalPages; page++)
             {
                 token.ThrowIfCancellationRequested();
 
@@ -548,7 +524,7 @@ namespace At_Hal_Logs
                 await Task.Delay(1000, token);
                 wait.Until(d => d.FindElement(By.CssSelector(".access-logs__table-row")));
 
-                var (pageLogs, doneFlag) = ScrapeAccessLogs(driver, dateYesterday, startIndex, firstRun);
+                var (pageLogs, doneFlag) = ScrapeAccessLogs(driver, startHour, startIndex, firstRun);
                 logs.AddRange(pageLogs);
                 isDone = doneFlag;
                 firstRun = false;
@@ -556,9 +532,9 @@ namespace At_Hal_Logs
                 if (isDone)
                     break;
 
-                if (page > 1)
+                if (page < totalPages)
                 {
-                    var nextPageButton = WaitForElement(driver, Globals.prevPageButton_Xpath);
+                    var nextPageButton = WaitForElement(driver, Globals.nextPageButton_Xpath);
                     nextPageButton.Click();
                     WaitForElement(driver, Globals.tableElement_Xpath);
                 }
@@ -583,7 +559,7 @@ namespace At_Hal_Logs
 
                 var client = GetHttpClient();
                 var response = await client.PostAsync(
-                    txtAPI_Dev.Text,
+                    txtAPI_Client.Text,
                     new StringContent(json, Encoding.UTF8, "application/json")
                 );
 
@@ -630,7 +606,7 @@ namespace At_Hal_Logs
             };
             var json = JsonConvert.SerializeObject(payload);
             var response = await _httpClient.PostAsync(
-                txtAPI_Dev.Text,
+                txtAPI_Client.Text,
                 new StringContent(json, Encoding.UTF8, "application/json")
             );
 
@@ -639,26 +615,6 @@ namespace At_Hal_Logs
             txtLogs.Text += Environment.NewLine + "Info Log sent, response:";
             txtLogs.Text += Environment.NewLine + responseContent;
         }
-        //Helpers
-        private bool DictionariesEqual(Dictionary<string, string> a, Dictionary<string, string> b)
-        {
-            if (a == null || b == null) return false;
-            if (a.Count != b.Count) return false;
-
-            foreach (var key in a.Keys)
-            {
-                if (!b.ContainsKey(key)) return false;
-
-                var valueA = a[key]?.Trim().Replace("\r", "") ?? "";
-                var valueB = b[key]?.Trim().Replace("\r", "") ?? "";
-
-                if (valueA != valueB) return false;
-            }
-
-            return true;
-        }
-
-
         //Captcha
         private void CheckForCaptcha(ChromeDriver driver)
         {
@@ -667,7 +623,7 @@ namespace At_Hal_Logs
                 CaptchaSolver(driver);
             }
 
-        } 
+        }
         private bool CaptchaDetecter(ChromeDriver driver)
         {
             try
@@ -756,7 +712,7 @@ namespace At_Hal_Logs
                         {
                             if (IsEmailBlocked(driver))
                             {
-                                await SendInfoLogsToSheetAPI("Manual email verification needed. Please log in to Hostinger on the machine before restarting the app.");
+                                //await SendInfoLogsToSheetAPI("Manual email verification needed. Please log in to Hostinger on the machine before restarting the app.");
 
                                 txtLogs.Text += Environment.NewLine + "Waiting up to 15 minutes for user to complete verification";
 
@@ -789,7 +745,7 @@ namespace At_Hal_Logs
                         }
                         if (IsEmailBlocked(driver))
                         {
-                            await SendInfoLogsToSheetAPI("Manual email verification needed. Please log in to Hostinger on the machine before restarting the app.");
+                            //await SendInfoLogsToSheetAPI("Manual email verification needed. Please log in to Hostinger on the machine before restarting the app.");
 
                             txtLogs.Text += Environment.NewLine + "Waiting up to 15 minutes for user to complete verification";
 
@@ -957,7 +913,7 @@ namespace At_Hal_Logs
                         CheckForCaptcha(driver);
                     }
                 }
-                catch (WebDriverException) {}
+                catch (WebDriverException) { }
 
                 await Task.Delay(TimeSpan.FromSeconds(15)); // check every 15 seconds
             }
@@ -973,9 +929,9 @@ namespace At_Hal_Logs
         private void ApplyFilters(ChromeDriver driver)
         {
             //Sort logs from oldest to newest and select max resuls per page
-            /*var sortByTimeButton = WaitForElement(driver, Globals.logsTableTimeFilter_Xpath);
+            var sortByTimeButton = WaitForElement(driver, Globals.logsTableTimeFilter_Xpath);
             ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", sortByTimeButton);
-            sortByTimeButton.Click();*/
+            sortByTimeButton.Click();
             txtLogs.Text += Environment.NewLine + "Trying to set max results 100";
             var maxResultsSelectionBox = WaitForElement(driver, Globals.resultsPerPageButton_Xpath);
             maxResultsSelectionBox.Click();
@@ -992,12 +948,6 @@ namespace At_Hal_Logs
 
             //convert to int
             int total = int.Parse(lastNumber);
-            //Check if more than 10000
-            if (total == 10000)
-            {
-
-                SendInfoLogsToSheetAPI($"10,000 or more logs detected for domain: {domainName}, please monitor results for the day");
-            }
             int totalPages = (int)Math.Ceiling((double)total / Globals.MAX_LOGS_PER_PAGE);
             return totalPages;
         }
@@ -1063,7 +1013,7 @@ namespace At_Hal_Logs
         private IWebElement? WaitForElementById(ChromeDriver drv, string id)
         {
             WebDriverWait wait = new WebDriverWait(drv, TimeSpan.FromSeconds(Globals.FINDING_ELEMENT_TIMEOUT));
-
+            Thread.Sleep(2000);
             try
             {
                 // Primary attempt - normal wait
@@ -1094,10 +1044,11 @@ namespace At_Hal_Logs
                 //Hard refresh
                 txtLogs.Text += Environment.NewLine + "-Refreshing Page-";
                 drv.Navigate().Refresh();
-                
+
                 bool ready = WaitForLoadingDone(drv);
                 Thread.Sleep(2000);
                 txtLogs.Text += Environment.NewLine + "-Trying by ID...-";
+                Thread.Sleep(2000);
                 var byId = TryFind(drv, By.Id(Globals.acceseLogsTab_Id));
                 if (byId != null) return byId;
                 txtLogs.Text += Environment.NewLine + "-Trying by data-qa...-";
@@ -1116,7 +1067,7 @@ namespace At_Hal_Logs
             }
             catch (Exception ex)
             {
-                txtLogs.Text += Environment.NewLine +$"Robust recovery error: {ex.Message}";
+                txtLogs.Text += Environment.NewLine + $"Robust recovery error: {ex.Message}";
                 return null;
             }
         }
@@ -1241,55 +1192,23 @@ namespace At_Hal_Logs
                 throw new Exception("PrepareBrowser error: " + ex.Message);
             }
         }
-        private async Task<string[]> GetDomainsFromSheetAPI()
+        private async Task<string> GetDomainsFromSheetAPI()
         {
             try
             {
-                var response = await _httpClient.GetAsync(txtAPI_Client.Text);
+                var response = await _httpClient.GetAsync(txtAPI_Dev.Text);
                 response.EnsureSuccessStatusCode();
-                var responseContent = await response.Content.ReadAsStringAsync();
-                var parsed = JsonConvert.DeserializeObject<Dictionary<string, object>>(responseContent);
+                var domain = await response.Content.ReadAsStringAsync();
 
-                if (parsed.TryGetValue("domains", out object? value))
-                {
-                    var domainsArray = JsonConvert.DeserializeObject<string[]>(value.ToString());
-                    return domainsArray;
-                }
-                return Array.Empty<string>(); // fallback empty
+                return domain.Trim();
             }
             catch (Exception ex)
             {
-                txtLogs.Text += Environment.NewLine + $"Error fetching domains: {ex.Message}";
-                return Array.Empty<string>();
+                txtLogs.Text += Environment.NewLine + $"Error fetching domain: {ex.Message}";
+                return string.Empty;
             }
         }
-        private async Task<Dictionary<string, string>?> GetLastRowFromSheet(string domain)
-        {
-            string url = $"{txtAPI_Dev.Text}?domain={Uri.EscapeDataString(domain)}";
 
-            var response = await _httpClient.GetAsync(url);
-            response.EnsureSuccessStatusCode();
-
-            string responseContent = await response.Content.ReadAsStringAsync();
-
-            var jsonObj = JsonConvert.DeserializeObject<JObject>(responseContent);
-            if (jsonObj == null || jsonObj["lastLog"] == null)
-                return null;
-
-            var lastRowObj = jsonObj["lastLog"] as JObject;
-            if (lastRowObj == null)
-                return null;
-
-            var lastRow = lastRowObj.Properties()
-                                     .ToDictionary(p => p.Name, p => p.Value.ToString());
-
-            if (lastRow.ContainsKey("Time") && DateTime.TryParse(lastRow["Time"], out DateTime parsedTime))
-            {
-                lastRow["Time"] = parsedTime.ToString("yyyy-MM-dd\nHH:mm:ss");
-            }
-
-            return lastRow;
-        }
         private IWebElement GetTimeSelection(ChromeDriver driver)
         {
             string? selectedValue = SelectBoxFilterByTime.SelectedItem?.ToString();
@@ -1386,6 +1305,7 @@ namespace At_Hal_Logs
             txtProfile.Text = Config.Get("ChromeProfile");
             txtAPI_Dev.Text = Config.Get("SheetAPIDev");
             txtAPI_Client.Text = Config.Get("SheetAPIClient");
+            SelectBoxHoursAgo.SelectedItem = Config.Get("HoursFilter");
         }
         private async void btnStart_Click(object sender, EventArgs e)
         {
@@ -1406,6 +1326,7 @@ namespace At_Hal_Logs
             Config.Set("SheetAPIDev", txtAPI_Dev.Text);
             Config.SetBool("TimerEnabled", chkEnableTimer.Checked);
             Config.Set("SheetAPIClient", txtAPI_Client.Text);
+            Config.Set("HoursFilter", SelectBoxHoursAgo.SelectedItem?.ToString() ?? "");
         }
         private void chkEnableTimer_CheckedChanged(object sender, EventArgs e)
         {
@@ -1446,10 +1367,22 @@ namespace At_Hal_Logs
             }
         }
 
+        /// <summary>
+        /// - Gets the "logs from X hours ago" from the selection box in the UI
+        /// - Calculate current machine time - the hour we got
+        /// </summary>
+        /// <returns>The "hour" X hours ago</returns>
         private string getTimeFrame()
         {
-            string yesterday = DateTime.Now.AddDays(-1).ToString("yyyy-MM-dd");
-            return yesterday;
+            int hoursAgo = int.Parse(SelectBoxHoursAgo.SelectedItem.ToString());
+            int currentHour = DateTime.Now.Hour;
+            int startHour = currentHour - hoursAgo;
+
+            // Handle wrap around
+            if (startHour < 0)
+                startHour += 24;
+            return startHour.ToString();
         }
+
     }
 }

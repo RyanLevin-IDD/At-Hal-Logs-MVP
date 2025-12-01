@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "D:\\251021_AT_HAL_logsV3\\At Hal Logs\\At Hal Logs\\At Hal Logs.csproj": {}
+    "C:\\Users\\Ryan\\Desktop\\251021_AT_HAL_logsV3\\251021_AT_HAL_logsV3\\At Hal Logs\\At Hal Logs\\At Hal Logs.csproj": {}
   },
   "projects": {
-    "D:\\251021_AT_HAL_logsV3\\At Hal Logs\\At Hal Logs\\At Hal Logs.csproj": {
+    "C:\\Users\\Ryan\\Desktop\\251021_AT_HAL_logsV3\\251021_AT_HAL_logsV3\\At Hal Logs\\At Hal Logs\\At Hal Logs.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "D:\\251021_AT_HAL_logsV3\\At Hal Logs\\At Hal Logs\\At Hal Logs.csproj",
+        "projectUniqueName": "C:\\Users\\Ryan\\Desktop\\251021_AT_HAL_logsV3\\251021_AT_HAL_logsV3\\At Hal Logs\\At Hal Logs\\At Hal Logs.csproj",
         "projectName": "At Hal Logs",
-        "projectPath": "D:\\251021_AT_HAL_logsV3\\At Hal Logs\\At Hal Logs\\At Hal Logs.csproj",
+        "projectPath": "C:\\Users\\Ryan\\Desktop\\251021_AT_HAL_logsV3\\251021_AT_HAL_logsV3\\At Hal Logs\\At Hal Logs\\At Hal Logs.csproj",
         "packagesPath": "C:\\Users\\Ryan\\.nuget\\packages\\",
-        "outputPath": "D:\\251021_AT_HAL_logsV3\\At Hal Logs\\At Hal Logs\\obj\\",
+        "outputPath": "C:\\Users\\Ryan\\Desktop\\251021_AT_HAL_logsV3\\251021_AT_HAL_logsV3\\At Hal Logs\\At Hal Logs\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

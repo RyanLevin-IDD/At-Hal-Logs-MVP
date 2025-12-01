@@ -65,12 +65,8 @@ internal class TimeManager
 
     private void ScheduleNextRun(DateTime fromTime)
     {
-        // Always schedule for 1 AM
-        DateTime nextRun = new DateTime(fromTime.Year, fromTime.Month, fromTime.Day, 1, 0, 0);
-
-        // If the time has already passed today, schedule for tomorrow
-        if (fromTime >= nextRun)
-            nextRun = nextRun.AddDays(1);
+        // Schedule for the next rounded hour
+        DateTime nextRun = new DateTime(fromTime.Year, fromTime.Month, fromTime.Day, fromTime.Hour, 0, 0).AddHours(1);
 
         _nextRunTime = nextRun;
         UpdateCountdownLabel(DateTime.Now);
